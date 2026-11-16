@@ -1,0 +1,11 @@
+--- a/miniaudio.h
++++ b/miniaudio.h
+@@ -54185,7 +54185,7 @@
+         return MA_INVALID_ARGS;
+     }
+ 
+-    d = 1000;
++    d = 1000000;    /* rally port, local patch 0002: was 1000 - see 0002-resampler-ratio-precision.patch */
+     n = (ma_uint32)(ratio * d);
+ 
+     if (n == 0) {

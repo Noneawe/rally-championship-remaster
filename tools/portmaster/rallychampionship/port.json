@@ -1,0 +1,29 @@
+{
+    "version": 2,
+    "name": "rallychampionship.zip",
+    "items": [
+        "Rally Championship.sh",
+        "rallychampionship/"
+    ],
+    "items_opt": null,
+    "attr": {
+        "title": "Rally Championship",
+        "desc": "Rally Championship Remaster: a reimplementation of the 1999 PC rally game Mobil 1 Rally Championship by Magnetic Fields, with the original's handling, physics, damage and race rules.",
+        "inst": "Requires your own copy of the original PC game. Copy RAL.EXE and the files and var folders from your installation into ports/rallychampionship/game/.",
+        "genres": [
+            "racing"
+        ],
+        "porter": [
+            "novocast"
+        ],
+        "image": {},
+        "rtr": false,
+        "exp": false,
+        "runtime": null,
+        "reqs": [],
+        "arch": [
+            "aarch64"
+        ],
+        "min_glibc": "@MIN_GLIBC@"
+    }
+}

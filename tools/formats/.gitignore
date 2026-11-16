@@ -1,0 +1,8 @@
+# Build artifacts. Sources only in the repo.
+*.o
+/ro3
+/bun
+/sq
+/cdat
+/localdat
+/pcx

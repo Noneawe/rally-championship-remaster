@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Copyrighted game data - NEVER commit.
+# The original game and its data belong to their rights holders. This project
+# is buildable by anyone, and playable by anyone who owns their own copy.
+# ---------------------------------------------------------------------------
+/original_files/
+/files/
+/var/
+/savedata/
+*.iso
+*.EXE
+*.exe
+*.gar
+
+# Graphics override packs: your OWN replacement art is committable; the
+# *.orig.png templates exported from the original textures are game data.
+overrides/**/*.orig.png
+
+# Build output (CMake builds out of source, into port/build*/)
+port/build*/
+build/
+*.o
+port/plat/plat_selftest
+port/plat/plat_selftest_sdl2
+port/plat/plat_selftest_gles2
+port/tests/**/*.json
+
+# Release packages (tools/portmaster/package.sh)
+/dist/
+
+# Runtime output
+rally.log
+*.ppm
+captures/
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+__pycache__/
+*.pyc

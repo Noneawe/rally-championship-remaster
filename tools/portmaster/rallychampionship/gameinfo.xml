@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<gameList>
+  <game>
+    <path>./Rally Championship.sh</path>
+    <name>Rally Championship</name>
+    <desc>A reimplementation of Mobil 1 Rally Championship (1999), the PC rally game by Magnetic Fields: long point-to-point stages through Britain's forests and hills, cars that feel like they weigh something, damage, weather and night stages. Requires your own copy of the original game.</desc>
+    <image>./rallychampionship/cover.png</image>
+    <releasedate>19990101T000000</releasedate>
+    <developer>Magnetic Fields</developer>
+    <publisher>Actualize</publisher>
+    <genre>Racing</genre>
+  </game>
+</gameList>
