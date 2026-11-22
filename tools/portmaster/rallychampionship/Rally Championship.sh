@@ -59,6 +59,22 @@ export LD_LIBRARY_PATH="$GAMEDIR/libs.${DEVICE_ARCH}:$LD_LIBRARY_PATH"
 # measured on an RG40XX-H, the driver scales 800x600 down at 48 fps, while
 # 640x480 is paced at two refreshes (30 fps).  window.txt overrides it.
 WIN="800x600"
+# R36S (RK3326, Mali-G31, 640x480 panel): 640x480 draws directly, no scaling
+# pass.  GL calls and the swap run on their own thread, so the simulation and
+# the scene walk overlap the driver and the GPU (42 -> 60 fps, same picture;
+# costs about one frame of input latency).  RALLY_GL_THREAD=0 turns it off, and
+# RALLY_ASYNC_SWAP=1 (swap thread only) is the milder variant.  Other devices:
+# untested, left off.
+if grep -q "R36S" /proc/cpuinfo 2>/dev/null; then
+  WIN="640x480"
+  export RALLY_GL_THREAD="${RALLY_GL_THREAD:-1}"
+  # the CPU's top operating point (1296 MHz; ArkOS caps at 1248): +4 % fps.
+  # Needs root; skipped silently without it, restored on exit.
+  CPUF=/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
+  CPUF_OLD="$(cat $CPUF 2>/dev/null)"
+  CPUF_TOP="$(tr ' ' '\n' < ${CPUF%max_freq}available_frequencies 2>/dev/null | sort -n | tail -n1)"
+  [ -n "$CPUF_OLD" ] && [ -n "$CPUF_TOP" ] && echo "$CPUF_TOP" | sudo -n tee $CPUF >/dev/null 2>&1
+fi
 [ -f "$GAMEDIR/window.txt" ] && WIN="$(head -n1 "$GAMEDIR/window.txt" | tr -d '\r\n ')"
 
 EXTRA=""
@@ -77,5 +93,6 @@ echo "\$ ./rally.${DEVICE_ARCH} --assets game --window $WIN $EXTRA"
 # shellcheck disable=SC2086
 ./rally.${DEVICE_ARCH} --assets game --window "$WIN" $EXTRA
 echo "rally exited with $?"
+[ -n "${CPUF_OLD:-}" ] && echo "$CPUF_OLD" | sudo -n tee $CPUF >/dev/null 2>&1
 
 pm_finish
