@@ -76,6 +76,7 @@
 #  define _POSIX_C_SOURCE 200809L
 #endif
 
+#include "plat_glthread.h"   /* the renames: this file is the GL thread's side */
 #include "plat.h"
 
 #include <SDL.h>
@@ -83,6 +84,8 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+void plat_gl_swap_join(void);   /* plat_sdl2.c: wait for the swap thread */
 #include <string.h>
 
 /* ---- 0. the GL subset, declared rather than included -------------------- */
@@ -331,6 +334,12 @@ static const char *FS_SRC =
 "#ifdef GL_ES\n"
 "precision mediump float;\n"
 "#endif\n"
+"/* each state test is a constant in a specialised program (S_*), a uniform in\n"
+"   the generic one: Mali does not fold uniform branches away */\n"
+"#ifdef S_TEX\n#define IS_TEX (S_TEX != 0)\n#else\n#define IS_TEX (u_textured > 0.5)\n#endif\n"
+"#ifdef S_B4\n#define IS_B4 (S_B4 != 0)\n#else\n#define IS_B4 (u_texblend > 3.0)\n#endif\n"
+"#ifdef S_FOG\n#define IS_FOG (S_FOG != 0)\n#else\n#define IS_FOG (u_fogenable > 0.5)\n#endif\n"
+"#ifdef S_ENV\n#define IS_ENV (S_ENV != 0)\n#else\n#define IS_ENV (u_env > 0.5)\n#endif\n"
 "uniform sampler2D u_tex;\n"
 "uniform float u_textured;    /* 0 = no texture bound */\n"
 "uniform float u_texblend;    /* D3D TEXTUREMAPBLEND: 2 modulate, 4 mod-alpha */\n"
@@ -348,22 +357,24 @@ static const char *FS_SRC =
 "void main()\n"
 "{\n"
 "    vec4 c = v_diffuse;\n"
-"    if (u_textured > 0.5) {\n"
+"    if (IS_TEX) {\n"
 "        vec4 t = texture2D(u_tex, v_uv);\n"
 "        /* MODULATE (2) takes the texture's alpha and ignores the vertex's;\n"
 "           MODULATEALPHA (4) multiplies them. Those are the only two values\n"
 "           the image writes to D3D state 21. */\n"
 "        c.rgb = t.rgb * v_diffuse.rgb;\n"
-"        c.a   = (u_texblend > 3.0) ? (t.a * v_diffuse.a) : t.a;\n"
+"        c.a   = IS_B4 ? (t.a * v_diffuse.a) : t.a;\n"
 "    }\n"
 "    /* Specular RGB is added after the texture blend, and specular ALPHA is\n"
 "       the vertex fog factor - that is what FOGTABLEMODE = NONE means for a\n"
 "       pre-transformed vertex. INTERPRETATION, not a measurement. */\n"
 "    c.rgb += v_specular.rgb;\n"
-"    if (u_fogenable > 0.5) {\n"
+"    if (IS_FOG) {\n"
 "        c.rgb = mix(u_fogcolor.rgb, c.rgb, clamp(v_specular.a, 0.0, 1.0));\n"
 "    }\n"
-"#ifndef NO_DISCARD   /* the variant for draws whose test cannot fail */\n"
+"#ifdef S_AF_GREATER\n"
+"    if (c.a <= u_alpharef) { discard; }\n"
+"#elif !defined(NO_DISCARD)   /* the variant for draws whose test cannot fail */\n"
 "    if (u_alphafunc > 0.5) {\n"
 "        float a = c.a, r = u_alpharef, f = u_alphafunc;\n"
 "        bool pass =\n"
@@ -381,7 +392,7 @@ static const char *FS_SRC =
 "       over the first - MODULATEALPHA, unfogged, SRCALPHA / ONE added onto\n"
 "       what the base wrote with its blending off - so it is that sum here,\n"
 "       rounded to 8 bits once instead of twice (plat_gfx_draw_env). */\n"
-"    if (u_env > 0.5) {\n"
+"    if (IS_ENV) {\n"
 "        vec4 e = texture2D(u_tex2, v_uv2);\n"
 "        c.rgb += e.rgb * v_ecol.rgb * (e.a * v_ecol.a);\n"
 "    }\n"
@@ -438,8 +449,10 @@ static const char *const g_uname[U__COUNT] = {
     "u_viewport", "u_textured", "u_texblend", "u_alphafunc", "u_alpharef",
     "u_fogenable", "u_fogcolor", "u_env" };
 static const int g_ulen[U__COUNT] = { 2, 1, 1, 1, 1, 1, 4, 1 };
-static plgl_uint  g_progs[2];
-static plgl_int   g_uloc[2][U__COUNT];
+#define NPROG 65                           /* [0] generic, [1+key] specialised */
+static plgl_uint  g_progs[NPROG];
+static plgl_int   g_uloc[NPROG][U__COUNT];
+static char       g_pfail[NPROG];
 static plgl_float g_uval[U__COUNT][4];
 static int        g_cur;                   /* the game's program in use */
 static int        g_no_fast;               /* RALLY_GL_NO_FAST: [0] only */
@@ -661,14 +674,41 @@ static int build_program(void)
     if (!g_progs[0]) {
         return 0;
     }
-    /* The variant is an optimisation: if it will not build, the game runs on
-     * [0] alone, exactly as before. */
-    g_progs[1] = build_one(1, "#define NO_DISCARD\n", "fragment, no discard");
-    g_no_fast  = getenv("RALLY_GL_NO_FAST") != NULL;
-    g_cur      = 1;
-    gl.UseProgram(g_progs[0]);          /* build_one left [1] in use */
-    g_cur      = 0;
+    g_no_fast = getenv("RALLY_GL_NO_FAST") != NULL;
+    g_cur     = 0;
     return 1;
+}
+
+/* Specialised program for `key` (bits: 1 no alpha test, 2 greater-only alpha
+ * test, 4 textured, 8 modulate-alpha, 16 fog, 32 env), built on first use.
+ * A build that fails marks the key and the generic program serves it. */
+static int spec_prog(int key)
+{
+    char def[256];
+    int  idx = 1 + key;
+    uint64_t t0;
+
+    if (g_progs[idx]) {
+        return idx;
+    }
+    if (g_pfail[idx]) {
+        return 0;
+    }
+    snprintf(def, sizeof def, "%s%s#define S_TEX %d\n#define S_B4 %d\n"
+             "#define S_FOG %d\n#define S_ENV %d\n",
+             (key & 1) ? "#define NO_DISCARD\n" : "",
+             (key & 2) ? "#define S_AF_GREATER\n" : "",
+             (key >> 2) & 1, (key >> 3) & 1, (key >> 4) & 1, (key >> 5) & 1);
+    t0 = plat_time_us();
+    g_progs[idx] = build_one(idx, def, "fragment, specialised");
+    plat_log("GFX: program variant %d built in %u ms\n", key, (unsigned)((plat_time_us() - t0) / 1000u));
+    if (!g_progs[idx]) {
+        g_pfail[idx] = 1;
+        gl.UseProgram(g_progs[g_cur]);
+        return 0;
+    }
+    gl.UseProgram(g_progs[g_cur]);      /* build_one left it in use */
+    return idx;
 }
 
 /* Write one shadowed uniform: kept for the next program switch, and sent to
@@ -704,22 +744,29 @@ static void uni_set(int u, plgl_float a, plgl_float b, plgl_float c,
  *     texel with alpha 0.
  * Anything else, including every untextured draw with the test on (the vertex
  * alpha can be 0), keeps the program with the test. */
-static void select_prog(void)
+static void select_prog(int env)
 {
-    int want = 0;
+    int key, want;
 
-    if (g_progs[1] && !g_no_fast) {
-        if (g_uval[U_ALPHAFUNC][0] < 0.5f) {
-            want = 1;
-        } else if (g_uval[U_ALPHAFUNC][0] == (plgl_float)PLAT_CMP_GREATER &&
-                   g_uval[U_ALPHAREF][0] == 0.0f &&
-                   g_uval[U_TEXTURED][0] > 0.5f &&
-                   !(g_uval[U_TEXBLEND][0] > 3.0f) &&
-                   g_bound_tex && g_bound_tex < PLAT_GL_MAX_TEX &&
-                   g_tex_nz0[g_bound_tex] && g_tex_nzm[g_bound_tex]) {
-            want = 1;
+    if (g_no_fast) {
+        return;
+    }
+    key = (g_uval[U_TEXTURED][0] > 0.5f ? 4 : 0) |
+          (g_uval[U_TEXBLEND][0] > 3.0f ? 8 : 0) |
+          (g_uval[U_FOGENABLE][0] > 0.5f ? 16 : 0) | (env ? 32 : 0);
+    if (g_uval[U_ALPHAFUNC][0] < 0.5f) {
+        key |= 1;
+    } else if (g_uval[U_ALPHAFUNC][0] == (plgl_float)PLAT_CMP_GREATER) {
+        if (g_uval[U_ALPHAREF][0] == 0.0f && g_uval[U_TEXTURED][0] > 0.5f &&
+            !(g_uval[U_TEXBLEND][0] > 3.0f) &&
+            g_bound_tex && g_bound_tex < PLAT_GL_MAX_TEX &&
+            g_tex_nz0[g_bound_tex] && g_tex_nzm[g_bound_tex]) {
+            key |= 1;           /* the test cannot reject a fragment */
+        } else {
+            key |= 2;
         }
     }
+    want = spec_prog(key);
     if (want != g_cur) {
         int u;
 
@@ -729,10 +776,7 @@ static void select_prog(void)
             uni_send(g_cur, u);
         }
     }
-    if (want && g_fast_draws == 0) {
-        plat_log("GFX: the program without the alpha test is in use\n");
-    }
-    g_fast_draws += (unsigned long)want;
+    g_fast_draws += (unsigned long)(key & 1);
 }
 
 /* the env draws leave their two attribute arrays and u_env ON (see
@@ -1000,6 +1044,7 @@ static int g_blitted;
 void plat_gl_present_begin(int dw, int dh);
 void plat_gl_present_begin(int dw, int dh)
 {
+    plat_gl_swap_join();
     int w = 0, h = 0, rw, rh, i;
 
     g_blitted = 0;
@@ -1042,6 +1087,7 @@ void plat_gl_present_begin(int dw, int dh)
 void plat_gl_present_end(int dw, int dh);
 void plat_gl_present_end(int dw, int dh)
 {
+    plat_gl_swap_join();
     int i;
 
     if (!g_ready) {
@@ -1255,6 +1301,7 @@ static void apply_state(plat_rs state, uint32_t value)
 
 void plat_gfx_set_state(plat_rs state, uint32_t value)
 {
+    plat_gl_swap_join();
     if (state >= PLAT_RS__COUNT) {
         return;
     }
@@ -1271,6 +1318,7 @@ void plat_gfx_set_state(plat_rs state, uint32_t value)
 
 void plat_gfx_reset_state(void)     /* was 0x00419EA1 */
 {
+    plat_gl_swap_join();
     memset(g_rs, 0, sizeof g_rs);
     memset(g_rs_valid, 0, sizeof g_rs_valid);
 }
@@ -1279,6 +1327,7 @@ void plat_gfx_reset_state(void)     /* was 0x00419EA1 */
 
 void plat_video_frame_begin(void)
 {
+    plat_gl_swap_join();
     if (!gfx_ready()) {
         return;
     }
@@ -1307,6 +1356,7 @@ void plat_video_frame_begin(void)
 
 void plat_video_scene_begin(void)    /* was GOTO3D 0x00419F29 */
 {
+    plat_gl_swap_join();
     int i;
 
     if (!gfx_ready()) {
@@ -1344,6 +1394,7 @@ void plat_video_scene_begin(void)    /* was GOTO3D 0x00419F29 */
 
 void plat_video_scene_end(void)      /* was GOTO2D 0x00419EEC */
 {
+    plat_gl_swap_join();
     /* EndScene has no GL counterpart. The original's is a flag flip and a
      * vtable call; there is nothing to flush here that the present does not
      * already flush. Kept so the bracket stays symmetrical in the log. */
@@ -1375,6 +1426,7 @@ static plgl_enum gl_prim(plat_prim p)
  *      draws still read.  Not to be retried. */
 void plat_gfx_set_stream(int mode)
 {
+    plat_gl_swap_join();
     g_stream = mode == 1 ? 1 : 0;
 }
 
@@ -1413,6 +1465,7 @@ void plat_gfx_set_tap(plat_gfx_tap_fn fn) { g_tap = fn; }
 
 void plat_gfx_draw(plat_prim p, const plat_vertex *v, unsigned nv)
 {
+    plat_gl_swap_join();
     g_draws++;
     g_verts += nv;
     if (g_tap && v && nv) {
@@ -1422,7 +1475,7 @@ void plat_gfx_draw(plat_prim p, const plat_vertex *v, unsigned nv)
         return;
     }
     env_off();
-    select_prog();
+    select_prog(0);
     upload_vertices(v, nv);
     gl.DrawArrays(gl_prim(p), 0, (plgl_sizei)nv);
 }
@@ -1434,6 +1487,7 @@ void plat_gfx_draw(plat_prim p, const plat_vertex *v, unsigned nv)
 void plat_gfx_draw_env(plat_prim p, const plat_vertex_env *v, unsigned nv,
                        plat_tex env)
 {
+    plat_gl_swap_join();
     uintptr_t base;
     size_t    bytes = (size_t)nv * sizeof(plat_vertex_env);
     plgl_sizei st = (plgl_sizei)sizeof(plat_vertex_env);
@@ -1482,7 +1536,7 @@ void plat_gfx_draw_env(plat_prim p, const plat_vertex_env *v, unsigned nv,
         tex_sampler_send(env);
         gl.ActiveTexture(GL_TEXTURE0);
     }
-    select_prog();
+    select_prog(1);
     if (!g_env_on) {
         gl.EnableVertexAttribArray(ATTR_UV2);
         gl.EnableVertexAttribArray(ATTR_ECOL);
@@ -1496,6 +1550,7 @@ void plat_gfx_draw_env(plat_prim p, const plat_vertex_env *v, unsigned nv,
 void plat_gfx_draw_indexed(plat_prim p, const plat_vertex *v, unsigned nv,
                            const uint16_t *idx, unsigned ni)
 {
+    plat_gl_swap_join();
     g_draws++;
     g_verts   += nv;
     g_indices += ni;
@@ -1506,7 +1561,7 @@ void plat_gfx_draw_indexed(plat_prim p, const plat_vertex *v, unsigned nv,
         return;
     }
     env_off();
-    select_prog();
+    select_prog(0);
     upload_vertices(v, nv);
     if (g_stream == 1) {                       /* client-side, as the vertices */
         gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
@@ -1526,6 +1581,7 @@ void plat_gfx_counters(unsigned long *draws, unsigned long *verts,
 void plat_gfx_counters(unsigned long *draws, unsigned long *verts,
                        unsigned long *indices)
 {
+    plat_gl_swap_join();
     if (draws)   { *draws   = g_draws; }
     if (verts)   { *verts   = g_verts; }
     if (indices) { *indices = g_indices; }
@@ -1536,6 +1592,7 @@ void plat_gfx_counters(unsigned long *draws, unsigned long *verts,
 unsigned long plat_gfx_fast_draws(void);
 unsigned long plat_gfx_fast_draws(void)
 {
+    plat_gl_swap_join();
     return g_fast_draws;
 }
 
@@ -1547,6 +1604,7 @@ unsigned long plat_gfx_fast_draws(void)
 int plat_gfx_read_pixel(int x, int y, unsigned char rgba[4]);
 int plat_gfx_read_pixel(int x, int y, unsigned char rgba[4])
 {
+    plat_gl_swap_join();
     void (PLAT_GLAPI *readpixels)(plgl_int, plgl_int, plgl_sizei, plgl_sizei,
                                   plgl_enum, plgl_enum, void *);
 
@@ -1609,6 +1667,7 @@ int plat_gfx_read_pixel(int x, int y, unsigned char rgba[4])
 int plat_gfx_cull_mode(int mode);
 int plat_gfx_cull_mode(int mode)
 {
+    plat_gl_swap_join();
     if (!gfx_ready()) {
         return 0;
     }
@@ -1632,6 +1691,7 @@ int plat_gfx_cull_mode(int mode)
 int plat_gfx_inset(int x, int y, int w, int h);
 int plat_gfx_inset(int x, int y, int w, int h)
 {
+    plat_gl_swap_join();
     int sw, sh;
     if (!gfx_ready()) {
         return 0;
@@ -1665,6 +1725,7 @@ typedef struct {
 void plat_gfx_state_save(plat_gfx_saved *s);
 void plat_gfx_state_save(plat_gfx_saved *s)
 {
+    plat_gl_swap_join();
     memcpy(s->v, g_rs, sizeof(g_rs));
     memcpy(s->valid, g_rs_valid, sizeof(g_rs_valid));
     s->tex = g_bound_tex;
@@ -1672,6 +1733,7 @@ void plat_gfx_state_save(plat_gfx_saved *s)
 void plat_gfx_state_restore(const plat_gfx_saved *s);
 void plat_gfx_state_restore(const plat_gfx_saved *s)
 {
+    plat_gl_swap_join();
     int i;
     /* The states first, while the overlay's own texture is still bound: a
      * sampler state lands on the bound texture (apply_state).  A state the
@@ -1704,6 +1766,7 @@ void plat_gfx_state_restore(const plat_gfx_saved *s)
 int plat_gfx_read_frame(unsigned char *rgba, int w, int h);
 int plat_gfx_read_frame(unsigned char *rgba, int w, int h)
 {
+    plat_gl_swap_join();
     void (PLAT_GLAPI *readpixels)(plgl_int, plgl_int, plgl_sizei, plgl_sizei,
                                   plgl_enum, plgl_enum, void *);
     int mw = 0, mh = 0;
@@ -1730,6 +1793,7 @@ int plat_gfx_read_frame(unsigned char *rgba, int w, int h)
 int plat_gfx_clear_depth(void);
 int plat_gfx_clear_depth(void)
 {
+    plat_gl_swap_join();
     if (!gfx_ready()) {
         return 0;
     }
@@ -1749,6 +1813,7 @@ int plat_gfx_clear_depth(void)
 plat_tex plat_gfx_frame_tex_create(unsigned w, unsigned h);
 plat_tex plat_gfx_frame_tex_create(unsigned w, unsigned h)
 {
+    plat_gl_swap_join();
     plat_tex  handle;
     plgl_uint name = 0;
 
@@ -1780,6 +1845,7 @@ plat_tex plat_gfx_frame_tex_create(unsigned w, unsigned h)
 int plat_gfx_frame_copy(plat_tex t, int w, int h);
 int plat_gfx_frame_copy(plat_tex t, int w, int h)
 {
+    plat_gl_swap_join();
     if (!gfx_ready() || t == 0 || t >= PLAT_GL_MAX_TEX || !g_tex_name[t]
         || w <= 0 || h <= 0) {
         return 0;
@@ -1824,6 +1890,7 @@ static plat_tex tex_create_f(unsigned w, unsigned h,
 plat_tex plat_gfx_tex_create(unsigned w, unsigned h,
                              const uint32_t *const *levels, unsigned nlevels)
 {
+    plat_gl_swap_join();
     return tex_create_f(w, h, levels, nlevels, GL_RGBA);
 }
 
@@ -1896,6 +1963,7 @@ static plat_tex tex_create_f(unsigned w, unsigned h,
 
 void plat_gfx_tex_destroy(plat_tex t)
 {
+    plat_gl_swap_join();
     if (t == 0 || t >= PLAT_GL_MAX_TEX || !g_tex_name[t]) {
         return;
     }
@@ -1932,6 +2000,7 @@ static void tex_update_f(plat_tex t, const uint32_t *level0, plgl_enum fmt);
 
 void plat_gfx_tex_update(plat_tex t, const uint32_t *level0)
 {
+    plat_gl_swap_join();
     tex_update_f(t, level0, GL_RGBA);
 }
 
@@ -1964,6 +2033,7 @@ static void tex_update_f(plat_tex t, const uint32_t *level0, plgl_enum fmt)
 int plat_gfx_tex_bgra(void);
 int plat_gfx_tex_bgra(void)
 {
+    plat_gl_swap_join();
     static int ok = -1;
 
     if (!gfx_ready()) {
@@ -1978,6 +2048,7 @@ int plat_gfx_tex_bgra(void)
 plat_tex plat_gfx_tex_create_bgra(unsigned w, unsigned h, const uint32_t *px);
 plat_tex plat_gfx_tex_create_bgra(unsigned w, unsigned h, const uint32_t *px)
 {
+    plat_gl_swap_join();
     const uint32_t *lv[1];
 
     if (!plat_gfx_tex_bgra()) {
@@ -1990,6 +2061,7 @@ plat_tex plat_gfx_tex_create_bgra(unsigned w, unsigned h, const uint32_t *px)
 void plat_gfx_tex_update_bgra(plat_tex t, const uint32_t *px);
 void plat_gfx_tex_update_bgra(plat_tex t, const uint32_t *px)
 {
+    plat_gl_swap_join();
     if (plat_gfx_tex_bgra()) {
         tex_update_f(t, px, GL_BGRA_EXT);
     }
@@ -1997,6 +2069,7 @@ void plat_gfx_tex_update_bgra(plat_tex t, const uint32_t *px)
 
 void plat_gfx_tex_smooth(plat_tex t, unsigned nlevels)
 {
+    plat_gl_swap_join();
     unsigned w, h, full = 1;
 
     if (!gfx_ready() || t == 0 || t >= PLAT_GL_MAX_TEX || !g_tex_name[t]) {
@@ -2042,6 +2115,7 @@ void plat_gfx_tex_smooth(plat_tex t, unsigned nlevels)
 
 void plat_gfx_tex_bind(plat_tex t)  /* was 0x0041A052, stage 0 only */
 {
+    plat_gl_swap_join();
     if (g_bound_tex == t) {
         return;                     /* the original's per-stage shadow */
     }

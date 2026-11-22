@@ -94,6 +94,61 @@ static int            g_swap_interval;
 static uint64_t       g_period_us = 1000000u / 60u;
 static uint64_t       g_last_present_us;
 
+/* Async swap (RALLY_ASYNC_SWAP=1).  On the R36S's Mali the swap blocks ~16 ms
+ * for the frame's fragment work, with the CPU idle.  A helper thread takes the
+ * context, swaps and gives it back, while the game thread runs the next frame's
+ * simulation; the first GL call after that (plat_gl_swap_join, at the top of
+ * every plat_gl.c entry) waits for it and takes the context back. */
+static SDL_Thread    *g_swap_thr;
+static SDL_sem       *g_swap_go, *g_swap_done;
+static volatile int   g_swap_quit, g_swap_pending;
+static int            g_swap_dw, g_swap_dh;
+
+static int swap_thread(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        SDL_SemWait(g_swap_go);
+        if (g_swap_quit) {
+            return 0;
+        }
+        SDL_GL_MakeCurrent(g_window, g_glctx);
+        SDL_GL_SwapWindow(g_window);
+        SDL_GL_MakeCurrent(g_window, NULL);
+        SDL_SemPost(g_swap_done);
+    }
+}
+
+void plat_gl_present_end(int dw, int dh);
+void plat_gl_swap_join(void)
+{
+    if (!g_swap_pending) {
+        return;
+    }
+    SDL_SemWait(g_swap_done);
+    g_swap_pending = 0;
+    SDL_GL_MakeCurrent(g_window, g_glctx);
+    plat_gl_present_end(g_swap_dw, g_swap_dh);
+}
+
+int  glt_start(SDL_Window *w, SDL_GLContext ctx);   /* plat_glthread.c */
+void glt_stop(void);
+int  glt_active(void);
+void glt_call(void (*fn)(void *), void *arg);
+void glt_present(int dw, int dh);
+
+static void swap_stop(void)
+{
+    glt_stop();
+    if (g_swap_thr) {
+        plat_gl_swap_join();
+        g_swap_quit = 1;
+        SDL_SemPost(g_swap_go);
+        SDL_WaitThread(g_swap_thr, NULL);
+        g_swap_thr = NULL;
+    }
+}
+
 static void plat_audio_open(void);
 
 /* plat_gl.c's half of the letterbox; not in plat.h. */
@@ -239,6 +294,7 @@ void plat_shutdown(void)
         SDL_GameControllerClose(g_pad);
         g_pad = NULL;
     }
+    swap_stop();
     if (g_glctx) {
         SDL_GL_DeleteContext(g_glctx);
         g_glctx = NULL;
@@ -293,6 +349,7 @@ int plat_video_set_mode(int width, int height, int bpp, int fullscreen)
 
     g_w = width; g_h = height; g_bpp = bpp; g_fullscreen = fullscreen;
 
+    swap_stop();
     if (g_glctx) {
         SDL_GL_DeleteContext(g_glctx);
         g_glctx = NULL;
@@ -331,6 +388,12 @@ int plat_video_set_mode(int width, int height, int bpp, int fullscreen)
     }
 
     SDL_GL_MakeCurrent(g_window, g_glctx);
+    if (getenv("RALLY_ASYNC_SWAP") && atoi(getenv("RALLY_ASYNC_SWAP"))) {
+        g_swap_go = SDL_CreateSemaphore(0);
+        g_swap_done = SDL_CreateSemaphore(0);
+        g_swap_thr = SDL_CreateThread(swap_thread, "swap", NULL);
+        plat_log("PLAT: async swap thread %s\n", g_swap_thr ? "on" : "FAILED");
+    }
     g_video_ok = 1;
     {
         SDL_DisplayMode dm;
@@ -349,15 +412,15 @@ int plat_video_set_mode(int width, int height, int bpp, int fullscreen)
                  width, height, bpp, fullscreen, plat_backend_name(), dw, dh,
                  (unsigned)(1000000u / g_period_us), g_swap_interval);
     }
+    if (!g_swap_thr && glt_start(g_window, g_glctx)) {
+        plat_log("PLAT: GL thread on\n");
+    }
     return 0;
 }
 
-void plat_video_set_vsync(int on)
+static void vsync_apply(void *unused)
 {
-    g_vsync = on ? 1 : 0;
-    if (!g_video_ok) {
-        return;
-    }
+    (void)unused;
     /* Adaptive first (a late frame tears rather than waits a whole refresh),
      * then plain vsync; a driver that refuses both leaves the frame cap in
      * plat_video_present to do the pacing on its own. */
@@ -370,6 +433,19 @@ void plat_video_set_vsync(int on)
         g_swap_interval = 1;
     } else {
         g_swap_interval = 0;
+    }
+}
+
+void plat_video_set_vsync(int on)
+{
+    g_vsync = on ? 1 : 0;
+    if (!g_video_ok) {
+        return;
+    }
+    if (glt_active()) {         /* the swap interval belongs to the context */
+        glt_call(vsync_apply, NULL);
+    } else {
+        vsync_apply(NULL);
     }
 }
 
@@ -416,9 +492,20 @@ void plat_video_present(void)     /* was ddsflip 0x00405518 */
      * resized window), the frame was drawn off-screen at the game's size and
      * is scaled into the window here, letterboxed. */
     plat_video_drawable_size(&dw, &dh);
-    plat_gl_present_begin(dw, dh);
-    SDL_GL_SwapWindow(g_window);
-    plat_gl_present_end(dw, dh);
+    if (glt_active()) {
+        glt_present(dw, dh);
+    } else if (g_swap_thr) {
+        plat_gl_present_begin(dw, dh);
+        SDL_GL_MakeCurrent(g_window, NULL);
+        g_swap_dw = dw;
+        g_swap_dh = dh;
+        g_swap_pending = 1;
+        SDL_SemPost(g_swap_go);
+    } else {
+        plat_gl_present_begin(dw, dh);
+        SDL_GL_SwapWindow(g_window);
+        plat_gl_present_end(dw, dh);
+    }
 
     /* The frame cap: where the swap did not wait for the display (no vsync,
      * or a driver that ignores it), sleep out the rest of a refresh period.
