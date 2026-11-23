@@ -76,7 +76,11 @@
 #  define _POSIX_C_SOURCE 200809L
 #endif
 
-#include "plat_glthread.h"   /* the renames: this file is the GL thread's side */
+#include "plat_glthread.h"
+#include "plat_touch.h"
+
+/* plat_sdl2.c: 1 when the touch overlay is on; fills the rest if not NULL */
+int plat_touch_view(int *race, unsigned *lit, float *steer);   /* the renames: this file is the GL thread's side */
 #include "plat.h"
 
 #include <SDL.h>
@@ -919,7 +923,7 @@ static void fbo_select(int dw, int dh)
     int w = 0, h = 0, want;
 
     plat_video_get_mode(&w, &h, NULL);
-    want = dw > 0 && dh > 0 && (dw != w || dh != h);
+    want = dw > 0 && dh > 0 && (dw != w || dh != h || plat_touch_view(NULL, NULL, NULL));
     if (want && !g_fbo_tried) {
         g_fbo_tried = 1;
         g_fbo_ok = fbo_build(w, h);
@@ -1041,6 +1045,162 @@ static const plgl_enum g_caps[4] = { GL_SCISSOR_TEST, GL_DEPTH_TEST, GL_BLEND,
                                      GL_CULL_FACE };
 static int g_blitted;
 
+
+/* ---- the touch controls' overlay -------------------------------------------
+ * Drawn into the window after the letterbox blit (plat_gl_present_begin), in
+ * window pixels, over the picture and the black bars alike.  One flat-colour
+ * program of its own, client-side vertices; the layout is plat_touch.c's, the
+ * same that plat_sdl2.c tests fingers against. */
+static const char *OV_VS_SRC =
+"#ifdef GL_ES\n"
+"precision highp float;\n"
+"#endif\n"
+"attribute vec2 a_bpos;\n"
+"uniform vec2 u_res;\n"
+"void main()\n"
+"{\n"
+"    gl_Position = vec4(a_bpos.x / u_res.x * 2.0 - 1.0,\n"
+"                       1.0 - a_bpos.y / u_res.y * 2.0, 0.0, 1.0);\n"
+"}\n";
+static const char *OV_FS_SRC =
+"#ifdef GL_ES\n"
+"precision mediump float;\n"
+"#endif\n"
+"uniform vec4 u_col;\n"
+"void main() { gl_FragColor = u_col; }\n";
+
+static plgl_uint g_ov_prog;
+static plgl_int  g_ov_res, g_ov_col;
+static int       g_ov_failed;
+
+static int ov_build(void)
+{
+    plgl_uint vs, fs;
+    plgl_int ok = 0;
+    vs = compile(GL_VERTEX_SHADER, OV_VS_SRC, "overlay vertex");
+    fs = vs ? compile(GL_FRAGMENT_SHADER, OV_FS_SRC, "overlay fragment") : 0;
+    if (!fs) {
+        if (vs) gl.DeleteShader(vs);
+        return 0;
+    }
+    g_ov_prog = gl.CreateProgram();
+    gl.AttachShader(g_ov_prog, vs);
+    gl.AttachShader(g_ov_prog, fs);
+    gl.BindAttribLocation(g_ov_prog, ATTR_POS, "a_bpos");
+    gl.LinkProgram(g_ov_prog);
+    gl.DeleteShader(vs);
+    gl.DeleteShader(fs);
+    gl.GetProgramiv(g_ov_prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        g_ov_prog = 0;
+        return 0;
+    }
+    g_ov_res = gl.GetUniformLocation(g_ov_prog, "u_res");
+    g_ov_col = gl.GetUniformLocation(g_ov_prog, "u_col");
+    return 1;
+}
+
+static void ov_rect(float x, float y, float w, float h,
+                    float r, float g, float b, float a)
+{
+    plgl_float q[8];
+    q[0] = x;     q[1] = y;
+    q[2] = x + w; q[3] = y;
+    q[4] = x;     q[5] = y + h;
+    q[6] = x + w; q[7] = y + h;
+    gl.Uniform4f(g_ov_col, r, g, b, a);
+    gl.VertexAttribPointer(ATTR_POS, 2, GL_FLOAT, GL_FALSE, 0, q);
+    gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
+/* 3 x 5 glyphs, rows top to bottom, 3 bits a row */
+static unsigned ov_glyph(char c)
+{
+    switch (c) {
+    case 'G': return 0x7 << 12 | 0x4 << 9 | 0x5 << 6 | 0x5 << 3 | 0x7;
+    case 'A': return 0x7 << 12 | 0x5 << 9 | 0x7 << 6 | 0x5 << 3 | 0x5;
+    case 'S': return 0x7 << 12 | 0x4 << 9 | 0x7 << 6 | 0x1 << 3 | 0x7;
+    case 'B': return 0x6 << 12 | 0x5 << 9 | 0x6 << 6 | 0x5 << 3 | 0x6;
+    case 'R': return 0x6 << 12 | 0x5 << 9 | 0x6 << 6 | 0x5 << 3 | 0x5;
+    case 'K': return 0x5 << 12 | 0x5 << 9 | 0x6 << 6 | 0x5 << 3 | 0x5;
+    case 'U': return 0x5 << 12 | 0x5 << 9 | 0x5 << 6 | 0x5 << 3 | 0x7;
+    case 'P': return 0x7 << 12 | 0x5 << 9 | 0x7 << 6 | 0x4 << 3 | 0x4;
+    case 'D': return 0x6 << 12 | 0x5 << 9 | 0x5 << 6 | 0x5 << 3 | 0x6;
+    case 'N': return 0x7 << 12 | 0x5 << 9 | 0x5 << 6 | 0x5 << 3 | 0x5;
+    case 'H': return 0x5 << 12 | 0x5 << 9 | 0x7 << 6 | 0x5 << 3 | 0x5;
+    case 'C': return 0x7 << 12 | 0x4 << 9 | 0x4 << 6 | 0x4 << 3 | 0x7;
+    case 'M': return 0x5 << 12 | 0x7 << 9 | 0x7 << 6 | 0x5 << 3 | 0x5;
+    case 'O': return 0x7 << 12 | 0x5 << 9 | 0x5 << 6 | 0x5 << 3 | 0x7;
+    case 'E': return 0x7 << 12 | 0x4 << 9 | 0x7 << 6 | 0x4 << 3 | 0x7;
+    case 'I': return 0x2 << 12 | 0x2 << 9 | 0x2 << 6 | 0x2 << 3 | 0x2;
+    case '^': return 0x2 << 12 | 0x7 << 9 | 0x2 << 6 | 0x2 << 3 | 0x2;
+    case 'v': return 0x2 << 12 | 0x2 << 9 | 0x2 << 6 | 0x7 << 3 | 0x2;
+    case '<': return 0x1 << 12 | 0x3 << 9 | 0x7 << 6 | 0x3 << 3 | 0x1;
+    case '>': return 0x4 << 12 | 0x6 << 9 | 0x7 << 6 | 0x6 << 3 | 0x4;
+    default:  return 0;
+    }
+}
+
+static void ov_label(const touch_btn *b, float a)
+{
+    size_t n = strlen(b->label), i;
+    float s = b->h * 0.5f / 5.0f, sw = b->w * 0.8f / (float)(4 * n - 1), x0, y0;
+    int r, c;
+    if (sw < s) s = sw;
+    s = (float)(int)s;
+    if (s < 1.0f) return;
+    x0 = b->x + (b->w - s * (float)(4 * n - 1)) * 0.5f;
+    y0 = b->y + (b->h - s * 5.0f) * 0.5f;
+    for (i = 0; i < n; i++) {
+        unsigned g = ov_glyph(b->label[i]);
+        for (r = 0; r < 5; r++)
+            for (c = 0; c < 3; c++)
+                if (g >> (14 - r * 3 - c) & 1u)
+                    ov_rect(x0 + s * (float)(4 * (int)i + c), y0 + s * (float)r,
+                            s, s, 1.0f, 1.0f, 1.0f, a);
+    }
+}
+
+static void ov_draw(int dw, int dh)
+{
+    touch_btn b[TOUCH_MAX_BTN];
+    unsigned lit = 0;
+    float steer = 0.0f, u = (float)dh / 10.0f;
+    int race = 0, n, i;
+
+    if (g_ov_failed || !plat_touch_view(&race, &lit, &steer)) return;
+    if (!g_ov_prog && !ov_build()) {
+        g_ov_failed = 1;
+        plat_log("GFX: touch overlay program failed\n");
+        return;
+    }
+    n = plat_touch_layout(dw, dh, race, b);
+    gl.UseProgram(g_ov_prog);
+    gl.Uniform2f(g_ov_res, (plgl_float)dw, (plgl_float)dh);
+    gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+    gl.Viewport(0, 0, dw, dh);
+    cap_set(GL_BLEND, 1);
+    gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    for (i = 0; i < n; i++) {
+        int on = (int)(lit >> i & 1u);
+        float r = b[i].axis == 2 ? 0.9f : b[i].axis == 1 ? 0.2f : 0.9f;
+        float g = b[i].axis == 2 ? 0.2f : b[i].axis == 1 ? 0.8f : 0.9f;
+        float bl = b[i].axis ? 0.2f : 0.9f;
+        ov_rect(b[i].x - 2.0f, b[i].y - 2.0f, b[i].w + 4.0f, b[i].h + 4.0f,
+                1.0f, 1.0f, 1.0f, 0.15f);
+        ov_rect(b[i].x, b[i].y, b[i].w, b[i].h, r * 0.4f, g * 0.4f, bl * 0.4f,
+                on ? 0.70f : 0.22f);
+        ov_label(&b[i], on ? 1.0f : 0.65f);
+    }
+    if (race) {                       /* the steering hint: a bar and its knob */
+        float cx = (float)dw * 0.5f, cy = (float)dh - 0.6f * u;
+        ov_rect(cx - 2.2f * u, cy - 0.06f * u, 4.4f * u, 0.12f * u,
+                1.0f, 1.0f, 1.0f, 0.25f);
+        ov_rect(cx + steer * 2.2f * u - 0.3f * u, cy - 0.3f * u, 0.6f * u, 0.6f * u,
+                1.0f, 1.0f, 1.0f, 0.55f);
+    }
+}
+
 void plat_gl_present_begin(int dw, int dh);
 void plat_gl_present_begin(int dw, int dh)
 {
@@ -1081,6 +1241,7 @@ void plat_gl_present_begin(int dw, int dh)
                            (plgl_sizei)(4 * sizeof(plgl_float)),
                            (const void *)(2 * sizeof(plgl_float)));
     gl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    ov_draw(dw, dh);
     g_blitted = 1;
 }
 

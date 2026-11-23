@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 int rally_main(int argc, char **argv);
 
@@ -50,7 +51,7 @@ int main(int argc, char **argv)
     snprintf(save, sizeof save, "%s/save", ext);
     snprintf(logp, sizeof logp, "%s/rally.log", ext);
     freopen(logp, "w", stdout);
-    freopen(logp, "a", stderr);
+    dup2(fileno(stdout), 2);                 /* one file offset for both */
     setvbuf(stdout, NULL, _IOLBF, 0);
 
     {

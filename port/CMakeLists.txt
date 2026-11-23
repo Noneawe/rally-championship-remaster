@@ -93,6 +93,7 @@ if(WIN32)
   set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 endif()
 
+enable_testing()
 add_subdirectory(plat)
 add_subdirectory(formats)
 add_subdirectory(stage)

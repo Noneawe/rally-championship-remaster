@@ -102,14 +102,20 @@ target_link_libraries(plat_audio_ma PRIVATE rally_c_flags PUBLIC rally_miniaudio
 # ---- the SDL2 backends ----------------------------------------------------
 
 if(RALLY_HAVE_SDL2)
-  add_library(plat_sdl2_gl STATIC plat_sdl2.c plat_gl.c plat_glthread.c ${PLAT_HEADERS})
+  add_library(plat_sdl2_gl STATIC plat_sdl2.c plat_gl.c plat_glthread.c plat_touch.c ${PLAT_HEADERS})
   target_include_directories(plat_sdl2_gl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(plat_sdl2_gl PRIVATE rally_c_flags
                         PUBLIC rally_sdl2 plat_audio_ma)
 
-  add_library(plat_sdl2_gles2 STATIC plat_sdl2.c plat_gl.c plat_glthread.c ${PLAT_HEADERS})
+  add_library(plat_sdl2_gles2 STATIC plat_sdl2.c plat_gl.c plat_glthread.c plat_touch.c ${PLAT_HEADERS})
   target_include_directories(plat_sdl2_gles2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_definitions(plat_sdl2_gles2 PRIVATE PLAT_SDL2_GLES2)
   target_link_libraries(plat_sdl2_gles2 PRIVATE rally_c_flags
                         PUBLIC rally_sdl2 plat_audio_ma)
 endif()
+
+# the touch layout's one runnable check: ctest -R plat_touch
+add_executable(plat_touch_check plat_touch_check.c plat_touch.c)
+target_include_directories(plat_touch_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(plat_touch_check PRIVATE rally_c_flags)
+add_test(NAME plat_touch COMMAND plat_touch_check)

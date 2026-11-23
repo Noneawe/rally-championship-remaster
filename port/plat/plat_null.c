@@ -173,6 +173,9 @@ int plat_gfx_cull_mode(int mode)
     return 0;
 }
 
+void plat_touch_context(int race);
+void plat_touch_context(int race) { (void)race; }
+
 int plat_gfx_pillar(int x, int w);
 int plat_gfx_pillar(int x, int w)
 {

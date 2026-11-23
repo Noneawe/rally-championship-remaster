@@ -127,6 +127,7 @@ int plat_gfx_cull_mode(int mode);
 int plat_gfx_inset(int x, int y, int w, int h);    /* the mirror */
 int plat_gfx_clear_depth(void);                    /* 0x0044CA08 */
 int plat_gfx_pillar(int x, int w);                 /* 4:3 menus on a wider frame */
+void plat_touch_context(int race);                 /* which on-screen controls */
 typedef struct {
     uint32_t v[PLAT_RS__COUNT];
     int      valid[PLAT_RS__COUNT];
@@ -1339,6 +1340,7 @@ static void race_sound_resume(void)     /* 0x0045ADAD */
  * and its waits keep the positions (the user: the race's buttons were right). */
 enum { PADK_MENU, PADK_RACE, PADK_WAIT, PADK_VIEW };
 static int pad_ctx;
+static void set_pad_ctx(int c) { pad_ctx = c; plat_touch_context(c == PADK_RACE); }
 static int pad_nintendo;
 
 static int pad_key(int sc)
@@ -4234,8 +4236,8 @@ static int race(options *op)
         if (plat_quit_requested()) { app_quit = 1; break; }
         snd_tick(&S);                       /* AUDIOTDB's service */
         ft[2] = plat_time_us();
-        pad_ctx = view_on ? PADK_VIEW                               
-                : G.modal != MODAL_NONE ? PADK_WAIT : PADK_RACE;   
+        set_pad_ctx(view_on ? PADK_VIEW                               
+                : G.modal != MODAL_NONE ? PADK_WAIT : PADK_RACE);   
         for (i = 0; i < VK_COUNT; i++) {
             int d = G.video ? key_down(keys[i]) : 0;
             pressed[i] = d && !keydown[i];
@@ -4740,7 +4742,7 @@ static int finish(options *op)
         C.log = S.log;                   /* the --sound-log's request lines  */
     }
     memset(G.fold_down, 1, sizeof G.fold_down);   /* no key "pressed" at once */
-    pad_ctx = PADK_WAIT;
+    set_pad_ctx(PADK_WAIT);
     t0_ms = (o.frame_ms || o.jitter) ? 0u : (uint32_t)(plat_time_us() / 1000u);
     while (!quit) {
         unsigned char jp[0x80];
@@ -5362,7 +5364,7 @@ static int menus(options *op)
             plat_input_poll();
             if (plat_quit_requested()) break;
             snd_tick(&S);                       /* AUDIOTDB's service */
-            pad_ctx = PADK_MENU;                
+            set_pad_ctx(PADK_MENU);                
             for (i = 0; i < 6; i++) {
                 int d = G.video ? key_down(sc[i]) : 0;
                 if (i == 4 && G.video) d |= plat_input_key(88);   /* KP ENTER */

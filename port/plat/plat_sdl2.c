@@ -51,6 +51,7 @@
 
 #include "plat.h"
 #include "plat_audio_ma.h"
+#include "plat_touch.h"
 
 /* No translation unit in the port includes SDL.h beside this one, so no
  * main is ever renamed to SDL_main; on Windows that means SDL2main is
@@ -76,6 +77,8 @@
 
 static FILE          *g_log;
 static SDL_Window    *g_window;
+static int            g_touch_on;       /* touch controls, see below */
+static int            g_real_pad;       /* a controller was used since the last touch */
 static SDL_GLContext  g_glctx;
 static int            g_w, g_h, g_bpp;
 static int            g_fullscreen;
@@ -280,6 +283,14 @@ int plat_init(const plat_config *cfg)
         plat_log("PLAT: no game controller support: %s\n", SDL_GetError());
     }
 
+#if defined(__ANDROID__)
+    g_touch_on = 1;
+#endif
+    if (getenv("RALLY_TOUCH")) {
+        g_touch_on = atoi(getenv("RALLY_TOUCH")) != 0;
+        SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "1");   /* a mouse stands in */
+    }
+    plat_log("PLAT: touch controls %s\n", g_touch_on ? "on" : "off");
     plat_log("PLAT: backend=%s sdl=%d.%d.%d\n", plat_backend_name(),
              SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL);
     return 0;
@@ -649,6 +660,62 @@ static void pad_detach(SDL_JoystickID id)
     for (i = 0; i < SDL_NumJoysticks() && !g_pad; i++) pad_attach(i);
 }
 
+/* ---- touch controls ---------------------------------------------------------
+ * On Android (or RALLY_TOUCH=1, where the mouse stands in for a finger) the
+ * screen's fingers make a virtual pad when no real controller is attached:
+ * plat_touch.c has the layout and the pad, plat_gl.c draws it. */
+static int           g_touch_on;
+static int           g_touch_race;
+static touch_finger  g_tf[TOUCH_MAX_FINGERS];
+static SDL_FingerID  g_tfid[TOUCH_MAX_FINGERS];
+
+void plat_touch_context(int race);
+void plat_touch_context(int race) { g_touch_race = race; }
+
+static void touch_event(const SDL_TouchFingerEvent *e, int type)
+{
+    int dw = 0, dh = 0, i, slot = -1;
+    float x, y;
+    plat_video_drawable_size(&dw, &dh);
+    x = e->x * (float)dw;
+    y = e->y * (float)dh;
+    for (i = 0; i < TOUCH_MAX_FINGERS; i++)
+        if (g_tf[i].down && g_tfid[i] == e->fingerId) slot = i;
+    if (type == SDL_FINGERDOWN) {
+        if (slot < 0)
+            for (i = 0; i < TOUCH_MAX_FINGERS && slot < 0; i++)
+                if (!g_tf[i].down) slot = i;
+        if (slot < 0) return;
+        g_tf[slot].down = 1;
+        g_tfid[slot] = e->fingerId;
+        g_tf[slot].x0 = g_tf[slot].x = x;
+        g_tf[slot].y0 = g_tf[slot].y = y;
+    } else if (slot >= 0) {
+        g_tf[slot].x = x;
+        g_tf[slot].y = y;
+        if (type == SDL_FINGERUP) g_tf[slot].down = 0;
+    }
+}
+
+/* plat_gl.c: 1 when the overlay is shown; the rest if not NULL */
+int plat_touch_view(int *race, unsigned *lit, float *steer);
+int plat_touch_view(int *race, unsigned *lit, float *steer)
+{
+    int dw = 0, dh = 0;
+    plat_pad p;
+    unsigned l = 0;
+    float st = 0.0f;
+    if (!g_touch_on || g_real_pad) return 0;
+    if (race) *race = g_touch_race;
+    if (lit || steer) {
+        plat_video_drawable_size(&dw, &dh);
+        plat_touch_eval(g_tf, TOUCH_MAX_FINGERS, dw, dh, g_touch_race, &p, &l, &st);
+        if (lit) *lit = l;
+        if (steer) *steer = st;
+    }
+    return 1;
+}
+
 void plat_input_poll(void)
 {
     SDL_Event ev;
@@ -672,6 +739,14 @@ void plat_input_poll(void)
             /* Alt+Enter, the Windows convention - the platform's,
              * not the game's; plat_input_key hides that RETURN. */
             plat_toggle_fullscreen();
+        } else if (ev.type == SDL_FINGERDOWN || ev.type == SDL_FINGERMOTION ||
+                   ev.type == SDL_FINGERUP) {
+            touch_event(&ev.tfinger, (int)ev.type);
+            if (ev.type == SDL_FINGERDOWN) g_real_pad = 0;
+        } else if (g_touch_on && (ev.type == SDL_CONTROLLERBUTTONDOWN ||
+                   (ev.type == SDL_CONTROLLERAXISMOTION &&
+                    (ev.caxis.value > 16000 || ev.caxis.value < -16000)))) {
+            g_real_pad = 1;      /* a phone's virtual "pad" device never does this */
         } else if (ev.type == SDL_CONTROLLERDEVICEADDED) {
             pad_attach(ev.cdevice.which);
         } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
@@ -713,6 +788,12 @@ int plat_pad_read(plat_pad *p)
     };
     size_t i;
     memset(p, 0, sizeof *p);
+    if (g_touch_on && !g_real_pad && !getenv("RALLY_FAKE_PAD")) {
+        int dw = 0, dh = 0;
+        plat_video_drawable_size(&dw, &dh);
+        plat_touch_eval(g_tf, TOUCH_MAX_FINGERS, dw, dh, g_touch_race, p, NULL, NULL);
+        return 1;
+    }
     if (!g_pad) {
         /* A TEST HOOK, for a headless run: RALLY_FAKE_PAD="buttons,lx,ly,lt,rt
          * [@N]" is a pad - buttons in hex (PLAT_PAD_* bits), the rest as the
@@ -770,6 +851,10 @@ int plat_input_key(int scancode)
     if ((scancode == SDL_SCANCODE_RETURN || scancode == SDL_SCANCODE_KP_ENTER)
         && (SDL_GetModState() & KMOD_ALT)) {
         return 0;
+    }
+    /* a phone's Back button is Esc */
+    if (scancode == SDL_SCANCODE_ESCAPE && keys[SDL_SCANCODE_AC_BACK]) {
+        return 1;
     }
     return keys[scancode] ? 1 : 0;
 }
