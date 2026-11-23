@@ -28,6 +28,7 @@ void     plat_glimpl_draw_indexed(plat_prim p, const plat_vertex *v, unsigned nv
 int      plat_glimpl_read_pixel(int x, int y, unsigned char rgba[4]);
 int      plat_glimpl_cull_mode(int mode);
 int      plat_glimpl_inset(int x, int y, int w, int h);
+int      plat_glimpl_pillar(int x, int w);
 void     plat_glimpl_state_save(plat_gfx_saved *s);
 void     plat_glimpl_state_restore(const plat_gfx_saved *s);
 int      plat_glimpl_read_frame(unsigned char *rgba, int w, int h);
@@ -70,7 +71,7 @@ static unsigned short     g_tw[MAX_TEX], g_th[MAX_TEX];  /* sizes, for updates *
 static int                g_bgra = -1;
 
 enum { OP_WRAP = 1, OP_SET_STATE, OP_RESET_STATE, OP_DRAW, OP_DRAW_ENV,
-       OP_DRAW_INDEXED, OP_CULL, OP_INSET, OP_SAVE, OP_RESTORE, OP_CLEAR_DEPTH,
+       OP_DRAW_INDEXED, OP_CULL, OP_INSET, OP_PILLAR, OP_SAVE, OP_RESTORE, OP_CLEAR_DEPTH,
        OP_FRAME_COPY, OP_TEX_DESTROY, OP_TEX_UPDATE, OP_TEX_UPDATE_BGRA,
        OP_TEX_SMOOTH, OP_TEX_BIND, OP_FRAME_BEGIN, OP_SCENE_BEGIN,
        OP_SCENE_END, OP_PRESENT, OP_CALL, OP_QUIT };
@@ -166,6 +167,10 @@ static void consume(const hdr *h)
     case OP_INSET: {
         const int *a = (const int *)p;
         plat_glimpl_inset(a[0], a[1], a[2], a[3]);
+        break; }
+    case OP_PILLAR: {
+        const int *a = (const int *)p;
+        plat_glimpl_pillar(a[0], a[1]);
         break; }
     case OP_SAVE:    plat_glimpl_state_save(&g_slot[*(const uint32_t *)p]); break;
     case OP_RESTORE: plat_glimpl_state_restore(&g_slot[*(const uint32_t *)p]); break;
@@ -378,6 +383,13 @@ int plat_gfx_inset(int x, int y, int w, int h)
 {
     if (!g_on) return plat_glimpl_inset(x, y, w, h);
     { int *a = q_alloc(OP_INSET, 16); a[0] = x; a[1] = y; a[2] = w; a[3] = h; q_commit(a); }
+    return 1;
+}
+
+int plat_gfx_pillar(int x, int w)
+{
+    if (!g_on) return plat_glimpl_pillar(x, w);
+    { int *a = q_alloc(OP_PILLAR, 8); a[0] = x; a[1] = w; q_commit(a); }
     return 1;
 }
 

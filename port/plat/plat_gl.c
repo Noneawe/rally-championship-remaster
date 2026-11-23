@@ -1710,6 +1710,29 @@ int plat_gfx_inset(int x, int y, int w, int h)
     return 1;
 }
 
+/* Not in plat.h either: a PILLAR, for 4:3 screens on a wider frame.  The
+ * menus are drawn for 4:3; on a 16:9 frame they would stretch.  With w > 0 the
+ * frame's x..x+w is the whole screen: pre-transformed coordinates 0..w map
+ * into it, so the caller draws at w x h and the rest stays black.  w <= 0
+ * puts the full frame back (the frame's own clear has already run). */
+int plat_gfx_pillar(int x, int w);
+int plat_gfx_pillar(int x, int w)
+{
+    plat_gl_swap_join();
+    int fw = 0, fh = 0;
+    if (!gfx_ready()) {
+        return 0;
+    }
+    plat_video_get_mode(&fw, &fh, NULL);
+    if (w <= 0) {
+        x = 0;
+        w = fw;
+    }
+    gl.Viewport(x, 0, w, fh);
+    uni_set(U_VIEWPORT, (plgl_float)w, (plgl_float)fh, 0.0f, 0.0f);
+    return 1;
+}
+
 /* Not in plat.h either: the render-state shadow and the bound texture, for a
  * caller that draws something the GAME does not draw - rally's stand-in HUD
  *and must hand the rest of the frame, and the next frame, exactly

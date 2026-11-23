@@ -173,6 +173,13 @@ int plat_gfx_cull_mode(int mode)
     return 0;
 }
 
+int plat_gfx_pillar(int x, int w);
+int plat_gfx_pillar(int x, int w)
+{
+    (void)x; (void)w;
+    return 0;
+}
+
 int plat_gfx_inset(int x, int y, int w, int h);
 int plat_gfx_inset(int x, int y, int w, int h)
 {

@@ -126,6 +126,7 @@ int plat_gfx_read_frame(unsigned char *rgba, int w, int h);
 int plat_gfx_cull_mode(int mode);
 int plat_gfx_inset(int x, int y, int w, int h);    /* the mirror */
 int plat_gfx_clear_depth(void);                    /* 0x0044CA08 */
+int plat_gfx_pillar(int x, int w);                 /* 4:3 menus on a wider frame */
 typedef struct {
     uint32_t v[PLAT_RS__COUNT];
     int      valid[PLAT_RS__COUNT];
@@ -5141,6 +5142,18 @@ static int write_canvas(const gfx2d_surface *s, const char *path)
 /* with a window, the menu frame as it is shown - the canvas, then the
  * 3D models over it (fe_draw_3d) - read back from GL.  Without one, the canvas
  * alone, which is what --no-window always wrote: the models need a context. */
+/* A menu screen: drawn for 4:3, so on a wider frame it sits in the middle
+ * with black either side (plat_gfx_pillar) instead of stretching. */
+static void menu_draw(fe *F)
+{
+    int w = G.w * 3 > G.h * 4 ? G.h * 4 / 3 : G.w;
+    if (w != G.w) plat_gfx_pillar((G.w - w) / 2, w);
+    gfx2d_present(fe_canvas(F), w, G.h);
+    fe_draw_3d(F, w, G.h);
+    if (fe_post(F)) gfx2d_present_over(fe_post(F), w, G.h);
+    if (w != G.w) plat_gfx_pillar(0, 0);
+}
+
 static int menu_shot(fe *F, const char *path)
 {
     int r;
@@ -5156,9 +5169,7 @@ static int menu_shot(fe *F, const char *path)
         return write_canvas(fe_canvas(F), path);
     }
     plat_video_frame_begin();
-    gfx2d_present(fe_canvas(F), G.w, G.h);
-    fe_draw_3d(F, G.w, G.h);
-    if (fe_post(F)) gfx2d_present_over(fe_post(F), G.w, G.h);   
+    menu_draw(F);
     fe_report_3d(F, stdout);
     r = write_ppm(path);
     plat_video_present();
@@ -5286,9 +5297,7 @@ static int menus(options *op)
                 us_fe += t1 - t0;
                 if (G.video) {
                     plat_video_frame_begin();
-                    gfx2d_present(fe_canvas(F), G.w, G.h);
-                    fe_draw_3d(F, G.w, G.h);
-                    if (fe_post(F)) gfx2d_present_over(fe_post(F), G.w, G.h);
+                    menu_draw(F);
                     us_draw += plat_time_us() - t1;
                     plat_video_present();
                 }
@@ -5384,9 +5393,7 @@ static int menus(options *op)
                 if (fe_vm_steps(F) - a > st_max) st_max = fe_vm_steps(F) - a;
                 st_fe += t1 - t0;
                 plat_video_frame_begin();
-                gfx2d_present(fe_canvas(F), G.w, G.h);
-                fe_draw_3d(F, G.w, G.h);                     
-                if (fe_post(F)) gfx2d_present_over(fe_post(F), G.w, G.h);   
+                menu_draw(F);
                 st_draw += plat_time_us() - t1;
                 plat_video_present();
                 st_frames++;

@@ -14,6 +14,7 @@
 #define plat_gfx_draw_indexed       plat_glimpl_draw_indexed
 #define plat_gfx_read_pixel         plat_glimpl_read_pixel
 #define plat_gfx_cull_mode          plat_glimpl_cull_mode
+#define plat_gfx_pillar plat_glimpl_pillar
 #define plat_gfx_inset              plat_glimpl_inset
 #define plat_gfx_state_save         plat_glimpl_state_save
 #define plat_gfx_state_restore      plat_glimpl_state_restore

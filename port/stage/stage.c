@@ -551,11 +551,12 @@ static int poly_reject(stage *s, const stage_view *v, const uint8_t *pol,
          * plane - right (z < x) or left (z < -x).  A quad that straddles
          * the wedge, or wraps behind the eye, goes on to the near clip. */
         int c, right = 1, left = 1;
+        float wk = v->wedge_k > 1.0f ? v->wedge_k : 1.0f;
         for (c = 0; c < 4 && (right || left); c++) {
             const stage_vtx *p = c == 0 ? slot : vtx_get(s, v,
                 cdat_u32(pol, (unsigned)(CDAT_POL_CORNER0 + c * 4)), st);
-            if (!(p->vz <  p->vx)) right = 0;
-            if (!(p->vz < -p->vx)) left  = 0;
+            if (!(p->vz * wk <  p->vx)) right = 0;
+            if (!(p->vz * wk < -p->vx)) left  = 0;
         }
         if (right || left) {
             if (st) { st->polys_culled_geom++; }
@@ -565,7 +566,7 @@ static int poly_reject(stage *s, const stage_view *v, const uint8_t *pol,
     }
 
     xi = fistp(fabsf(slot->vx));
-    zi = fistp(slot->vz);
+    zi = fistp(v->wedge_k > 1.0f ? slot->vz * v->wedge_k : slot->vz);
     if (zi < xi) {
         if (st) { st->polys_culled_geom++; }
         return 1;
@@ -1350,7 +1351,7 @@ static int build_poly(stage *s, const stage_view *v, const uint8_t *pol,
 
             if (signbit(vz)) { continue; }          /* `TEST ...,0x80000000` */
             if (fabsf(vx) < 1048576.0f) { accept = 1; break; }
-            if (fabsf(vx) * 1.2f < vz)  { accept = 1; break; }
+            if (fabsf(vx) * 1.2f < (v->wedge_k > 1.0f ? vz * v->wedge_k : vz)) { accept = 1; break; }
         }
         if (!accept) {
             return 0;

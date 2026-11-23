@@ -365,6 +365,9 @@ typedef struct {
      * beside the eye drops out whole while its other corners are on screen.
      * Non-zero rejects only when ALL FOUR corners are outside the SAME side
      * plane. */
+    /* Side culling for a frame wider than 4:3: the wedge is 90 degrees at
+     * 1.0 and widens to tan(half angle) = wedge_k.  0 means 1 (the original). */
+    float    wedge_k;
     int      cull_all_corners;
 
     /* The port's own knob, and it exists because CULLMODE has zero write sites

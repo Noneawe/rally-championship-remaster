@@ -71,7 +71,13 @@ static void finish(stage_view *v, const ral_mat4 *rot, const int32_t eye[3],
     v->eye_y = eye[1];
     v->has_eye_y = 1;
     /* FUN_0044C516 at 0x0044C5B5: width x fishval x zoom x 1/163840. */
-    v->focal = (float)((double)screen_w * fishval * 256.0 * k->focal_k);
+    /* Wider than 4:3 keeps the 4:3 picture's vertical view and shows more to
+     * the sides (Hor+), not the same width with the top and bottom cropped. */
+    if (screen_w * 3 > screen_h * 4)
+        v->wedge_k = (float)screen_w / (float)(screen_h * 4 / 3);
+    v->focal = (float)((double)(screen_w * 3 > screen_h * 4 ? screen_h * 4 / 3
+                                                              : screen_w)
+                       * fishval * 256.0 * k->focal_k);
 }
 
 void camview_main(stage_view *v, int screen_w, int screen_h,

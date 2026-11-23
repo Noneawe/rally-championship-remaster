@@ -44,6 +44,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 elseif(MSVC)
   target_compile_options(rally_c_flags INTERFACE /W4)
 endif()
+# Case-insensitive fopen for the game's Windows-spelled paths (plat/fopen_ci.h)
+if(NOT WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options(-include ${CMAKE_CURRENT_SOURCE_DIR}/plat/fopen_ci.h)
+endif()
 
 # -O3 by default: the simulation gives bit-identical results at -O2 and -O3
 # (no fused multiply-add is emitted), and -O3 is measurably faster on the
