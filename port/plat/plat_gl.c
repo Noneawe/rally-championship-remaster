@@ -1192,7 +1192,7 @@ static void ov_draw(int dw, int dh)
                 on ? 0.70f : 0.22f);
         ov_label(&b[i], on ? 1.0f : 0.65f);
     }
-    if (race) {                       /* the steering hint: a bar and its knob */
+    if (race == 1) {                  /* the steering hint: a bar and its knob */
         float cx = (float)dw * 0.5f, cy = (float)dh - 0.6f * u;
         ov_rect(cx - 2.2f * u, cy - 0.06f * u, 4.4f * u, 0.12f * u,
                 1.0f, 1.0f, 1.0f, 0.25f);

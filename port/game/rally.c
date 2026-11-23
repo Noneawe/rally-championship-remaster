@@ -1340,7 +1340,7 @@ static void race_sound_resume(void)     /* 0x0045ADAD */
  * and its waits keep the positions (the user: the race's buttons were right). */
 enum { PADK_MENU, PADK_RACE, PADK_WAIT, PADK_VIEW };
 static int pad_ctx;
-static void set_pad_ctx(int c) { pad_ctx = c; plat_touch_context(c == PADK_RACE); }
+static void set_pad_ctx(int c) { pad_ctx = c; plat_touch_context(c == PADK_RACE ? 1 : (c == PADK_WAIT ? 2 : 0)); }
 static int pad_nintendo;
 
 static int pad_key(int sc)
@@ -1385,6 +1385,17 @@ static int pad_key(int sc)
         if (sc == 40)
             return G.race_over && (b & (PLAT_PAD_A | PLAT_PAD_START)) != 0;
         return 0;
+    }
+    /* RETIRE?'s answers are the first letters of the lexicon's 195..197 ("t",
+     * "n" in the Polish text): A yes, B no, X all - whatever the letters are */
+    if (G.have_lex) {
+        int id;
+        for (id = 0xC3; id <= 0xC5; id++) {
+            int c = (unsigned char)lexicon_text(&G.lex, id)[0] | 0x20;
+            if (c >= 'a' && c <= 'z' && sc == 4 + (c - 'a'))
+                return (b & (id == 0xC3 ? PLAT_PAD_A : id == 0xC4 ? PLAT_PAD_B
+                                                                  : PLAT_PAD_X)) != 0;
+        }
     }
     switch (sc) {
     case 28: return (b & PLAT_PAD_A) != 0;                      /* y */

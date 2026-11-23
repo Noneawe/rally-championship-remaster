@@ -16,6 +16,13 @@ int plat_touch_layout(int w, int h, int race, touch_btn out[TOUCH_MAX_BTN])
     float u = (float)h / 10.0f, W = (float)w, H = (float)h;
     int n = 0;
 
+    if (race == 2) {                 /* a yes / no question: big buttons */
+        btn(out, &n, W * 0.5f - 6.0f * u, H - 4.2f * u, 5.0f * u, 3.0f * u,
+            PLAT_PAD_A, 0, "YES");
+        btn(out, &n, W * 0.5f + 1.0f * u, H - 4.2f * u, 5.0f * u, 3.0f * u,
+            PLAT_PAD_B, 0, "NO");
+        return n;
+    }
     if (!race) {
         float cx = 3.0f * u, cy = H - 3.0f * u, s = 1.7f * u;
         btn(out, &n, cx - s / 2, cy - s * 1.5f, s, s, PLAT_PAD_UP,    0, "^");
@@ -35,6 +42,7 @@ int plat_touch_layout(int w, int h, int race, touch_btn out[TOUCH_MAX_BTN])
     btn(out, &n, W - 6.5f * u, H - 5.4f * u, 2.9f * u, 1.9f * u, PLAT_PAD_A, 0, "HB");
     btn(out, &n, W - 2.4f * u, 0.8f * u, 2.0f * u, 1.3f * u, PLAT_PAD_Y, 0, "CAM");
     btn(out, &n, W * 0.5f - 1.0f * u, 0.7f * u, 2.0f * u, 1.3f * u, PLAT_PAD_START, 0, "II");
+    btn(out, &n, W * 0.5f + 1.4f * u, 0.7f * u, 2.4f * u, 1.3f * u, PLAT_PAD_BACK, 0, "ESC");
     return n;
 }
 
@@ -56,7 +64,7 @@ void plat_touch_eval(const touch_finger *f, int nf, int w, int h, int race,
     for (i = 0; i < nf; i++) {
         if (!f[i].down) continue;
         /* a drag that began in the left 45% steers (race only) */
-        if (race && f[i].x0 < 0.45f * (float)w) {
+        if (race == 1 && f[i].x0 < 0.45f * (float)w) {
             float s = (f[i].x - f[i].x0) / (2.2f * u);
             if (s > 1.0f) s = 1.0f;
             if (s < -1.0f) s = -1.0f;
