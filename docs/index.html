@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rally Championship Remaster on the R36S: 23 to 60 fps</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:820px;margin:2rem auto;padding:0 1rem;color:#222;background:#fff}
+@media(prefers-color-scheme:dark){body{color:#ddd;background:#16181c}a{color:#8ab4ff}code,pre{background:#23262b!important}}
+h1,h2{line-height:1.2} img{max-width:100%;border-radius:6px} code,pre{background:#f1f1f1;padding:.1em .3em;border-radius:4px} pre{padding:.8em;overflow:auto}
+table{border-collapse:collapse} td,th{border-bottom:1px solid #8884;padding:.3em .8em;text-align:left}
+.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:.8rem}
+</style></head><body>
+<h1>Rally Championship Remaster on the R36S: 23 to 60 fps</h1>
+<p>A performance fork of <a href="https://github.com/novocast/rally-championship-remaster">novocast/rally-championship-remaster</a> for the R36S handheld (RK3326, 4x Cortex-A35, Mali-G31, ArkOS). Stage <code>LEVEL33</code> at the native 640x480 went from about 23 fps to about 60 fps. 800x600 went from 18.5 to about 58 fps. Physics and rendered frames are unchanged: the same input gives byte-identical simulation records and screenshots.</p>
+<div class="g"><img src="img/stage_b.png" alt="In-game, Clocaenog Mid stage, rendered on the R36S"><img src="img/menu_2.png" alt="Stage select menu rendered on the R36S"></div>
+<p><small>Both screenshots were captured on the R36S itself (640x480).</small></p>
+<h2>Result</h2>
+<svg viewBox="0 0 620 250" width="100%" role="img" aria-label="FPS per optimisation step" font-size="15" fill="currentColor"><text x="190" y="27" text-anchor="end">Baseline</text><rect x="200" y="5" width="138" height="34" rx="4" fill="#e4572e"/><text x="346" y="27">~23 fps</text><text x="190" y="75" text-anchor="end">Async swap thread</text><rect x="200" y="53" width="168" height="34" rx="4" fill="#e4572e"/><text x="376" y="75">~28 fps</text><text x="190" y="123" text-anchor="end">Specialised shaders</text><rect x="200" y="101" width="246" height="34" rx="4" fill="#e4572e"/><text x="454" y="123">~41 fps</text><text x="190" y="171" text-anchor="end">CPU 1296 MHz + LTO</text><rect x="200" y="149" width="255" height="34" rx="4" fill="#e4572e"/><text x="463" y="171">~42.5 fps</text><text x="190" y="219" text-anchor="end">GL command thread</text><rect x="200" y="197" width="360" height="34" rx="4" fill="#e4572e"/><text x="568" y="219">~60 fps</text></svg>
+<p><small>Stage LEVEL33, gearbox 2, full throttle after 850 steps, 640x480. Figures are approximate averages of interleaved runs, not a lab benchmark.</small></p>
+<h2>Where the time went</h2>
+<ol>
+<li><b>The generic fragment shader was the GPU bottleneck.</b> It used uniform-driven branches (texture on/off, fog, env map, alpha test). On the Mali-G31 those branches are not free. Fix: 64 specialised programs, built on first use, with the state baked in as constants. The generic program stays as fallback (<code>RALLY_GL_NO_FAST=1</code>).</li>
+<li><b>Mali is tile based: the fragment work runs inside <code>eglSwapBuffers</code>.</b> The call blocks about 10 ms with the CPU idle. An async swap thread overlaps that with the next frame's CPU work (<code>RALLY_ASYNC_SWAP=1</code>).</li>
+<li><b>CPU frequency and LTO.</b> The launcher raises <code>scaling_max_freq</code> to the top OPP (1296 MHz instead of the ArkOS 1248 MHz cap) and restores it on exit. The release build uses LTO.</li>
+<li><b>A dedicated GL thread.</b> All GL calls go through a single-producer ring buffer (16 MB) to one thread that owns the context. The game thread copies vertices into the ring and carries on with the simulation. Calls that return data (texture creation, pixel reads) are synchronous. Everything else is asynchronous (<code>RALLY_GL_THREAD=0</code> disables it).</li>
+</ol>
+<p>Client-side vertex arrays proved faster than VBOs on this driver, so the vertex path stayed as it was.</p>
+<h2>Where it stands now</h2>
+<p>At about 60 fps the GL thread is busy about 16.5 ms per frame (swap about 10 ms, GL calls about 6.7 ms) and the game thread about 15.7 ms (simulation 5 ms, drawing 10.7 ms). Both are close to saturated, so a separate simulation thread would not help on its own. Further gains need less GPU work and less driver work together.</p>
+<h2>Verification</h2>
+<ul>
+<li>Fixed-step runs (<code>--frame-ms 16 --steps N --dump FILE --shot FRAME:FILE</code>): physics records and frame dumps have identical md5 with every feature on and off.</li>
+<li>Interleaved A/B benchmarks on the device; same numbers with vsync, as the launcher runs it.</li>
+<li>Menu smoke test on the device.</li>
+</ul>
+<p><b>Not verified:</b> how it feels to play, input latency (the GL thread adds up to about one frame), temperatures and battery over a long session, and other devices. This needs a person with the console.</p>
+<h2>Install on the R36S</h2>
+<ol>
+<li>Build for aarch64 against a glibc 2.30 sysroot (see below), or use your own build.</li>
+<li>Copy the binary, the game data (you need your own copy of the game) and <code>tools/portmaster/rallychampionship/Rally Championship.sh</code> to <code>/roms/ports/</code>.</li>
+<li>Start it from the Ports menu. The launcher detects the R36S (<code>grep R36S /proc/cpuinfo</code>), picks 640x480, enables the GL thread and raises the CPU frequency.</li>
+</ol>
+<pre>cmake -S port -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+  -DRALLY_SYSROOT=/path/to/sysroot -DRALLY_TUNE=cortex-a35 -DCMAKE_BUILD_TYPE=Release
+cmake --build build</pre>
+<h2>Environment switches</h2>
+<table><tr><th>Variable</th><th>Effect</th></tr>
+<tr><td><code>RALLY_GL_THREAD=0</code></td><td>no GL thread</td></tr>
+<tr><td><code>RALLY_ASYNC_SWAP=1</code></td><td>async swap thread (not used together with the GL thread)</td></tr>
+<tr><td><code>RALLY_GL_NO_FAST=1</code></td><td>generic fragment shader only</td></tr></table>
+<h2>Changes</h2>
+<p>Code is in <code>port/plat/plat_gl.c</code>, <code>plat_sdl2.c</code>, the new <code>plat_glthread.c/.h</code>, and the launcher script. Two commits on top of upstream 1.1.0. The game data is copyrighted and is not in this repository.</p>
+</body></html>
