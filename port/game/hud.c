@@ -112,6 +112,25 @@ static void batch_add(plat_tex tex, const plat_vertex *v, unsigned nv,
     g_batch.ni += ni;
 }
 
+/* The HUD is laid out on 800 x 600.  Wider than 4:3 it keeps that scale (by
+ * height) so a round dial stays round: the left items stay at the left edge,
+ * the right items move to the right edge, and what lies between (the progress
+ * bar, the banner) is spread across the gap, continuously.  4:3 and narrower
+ * are the original's plain scaling, unchanged. */
+static int g_hud_mid;       /* drawing something centred on x = 400: not spread */
+
+static double hud_x(double x, int w, int h)
+{
+    double s, extra;
+    if (w * 3 <= h * 4) return x * w / 800.0;
+    s = h / 600.0;
+    extra = w - 800.0 * s;
+    if (g_hud_mid) return x * s + extra * 0.5;
+    if (x <= 200.0) return x * s;
+    if (x >= 600.0) return x * s + extra;
+    return x * s + extra * (x - 200.0) / 400.0;
+}
+
 static void quad(const pen *pn, const float x[4], const float y[4],
                  const float u[4], const float v[4])
 {
@@ -122,7 +141,7 @@ static void quad(const pen *pn, const float x[4], const float y[4],
     for (k = 0; k < 4; k++) {
         /* THE PORT'S HALF PIXEL (hud.h): Direct3D samples a pre-transformed
          * quad at pixel corners, GL at centres. */
-        q[k].sx  = (float)((double)x[k] * pn->w / 800.0) + 0.5f;
+        q[k].sx  = (float)hud_x((double)x[k], pn->w, pn->h) + 0.5f;
         q[k].sy  = (float)((double)y[k] * pn->h / 600.0) + 0.5f;
         q[k].sz  = 0.01f;
         q[k].rhw = 1.0f;
@@ -1350,7 +1369,7 @@ static void map_disc(const hud *h, const pen *pn)
         u = (s2 * 62.0 * 0.75 + 48.0 + h->map_x) / 128.0;
         v = (-c2 * 62.0 * 0.75 + 48.0 + h->map_y) / 128.0;
         /* FUN_004CE912's scale, and THE PORT'S HALF PIXEL (quad, above) */
-        q[k].sx  = (float)(x * pn->w / 800.0) + 0.5f;
+        q[k].sx  = (float)hud_x(x, pn->w, pn->h) + 0.5f;
         q[k].sy  = (float)(y * pn->h / 600.0) + 0.5f;
         q[k].sz  = 0.01f;
         q[k].rhw = 1.0f;
@@ -1403,7 +1422,9 @@ static void layout0(const hud *h, const sim_race *rc, uint32_t slot, int sw,
         flat(&pn, x0 + 1, y1, x1 + 1, y1 + 1);
         pn.rgb = 0xFFFFFF;
     }
+    g_hud_mid = 1;
     countdown_draw(h, &pn, rc ? rc->olaydraw[slot & 1u] : b->olaydraw);
+    g_hud_mid = 0;
     pn.rgb = 0xFFFFFF;
     pn.alpha = 0xFF;
     pn.tex = h->tex_c1;
@@ -1545,7 +1566,9 @@ void hud_draw(hud *h, const sim_race *rc, uint32_t slot, int race_over,
     layout0(h, rc, slot, screen_w, screen_h);
     pn.w = screen_w;
     pn.h = screen_h;
+    g_hud_mid = 1;
     banner(h, rc, slot, &pn);
+    g_hud_mid = 0;
     labels(h, &pn);
     hud_flush();
     /* THE PORT'S, not the original's (hud.h): the original goes to its
@@ -1558,9 +1581,11 @@ void hud_draw(hud *h, const sim_race *rc, uint32_t slot, int race_over,
         pn.tex = h->tex_prompt;
         pn.alpha = 0xFF;
         pn.rgb = 0xFFFFFF;
+        g_hud_mid = 1;
         rect_uv(&pn, 220, (h->b.panel ? 128 : 96) + 32, 580,
                 (h->b.panel ? 128 : 96) + 57, 0.0f, 0.0f,
                 180.0f / 256.0f, 12.5f / 16.0f);
+        g_hud_mid = 0;
         hud_flush();
     }
 }

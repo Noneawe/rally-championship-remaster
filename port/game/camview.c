@@ -137,6 +137,11 @@ void camview_mirror(stage_view *v, int screen_w, int screen_h,
     rect[1] = (int)((uint32_t)k->mirror_at[idx][1] * (uint32_t)screen_h / 600u);
     rect[2] = (int)(0xB3u * (uint32_t)screen_w / 800u);
     rect[3] = (int)(0x40u * (uint32_t)screen_h / 600u);
+    if (screen_w * 3 > screen_h * 4) {      /* wider than 4:3: the HUD's layout (hud.c hud_x) */
+        double sc = screen_h / 600.0;
+        rect[0] = (int)(k->mirror_at[idx][0] * sc + (screen_w - 800.0 * sc));
+        rect[2] = (int)(0xB3 * sc);
+    }
 
     /* 0x00436D98: [0x0059EC14] x the car's matrix, inverted. */
     memcpy(mr.m, k->mirror_rot, sizeof mr.m);
