@@ -19,7 +19,7 @@ if(RALLY_INTERP)
   set(RALLY_VM_SRC x86vm.c)
 endif()
 
-add_executable(rally rally.c vfs.c vfs.h camview.c camview.h
+set(RALLY_SRC rally.c vfs.c vfs.h camview.c camview.h
                viewer_keys.h car_input.c car_input.h car_keys.h
                car_load.c car_load.h wear.c wear.h
                hud.c hud.h frontend.c frontend.h lexicon.c lexicon.h
@@ -36,6 +36,16 @@ add_executable(rally rally.c vfs.c vfs.h camview.c camview.h
                fireworks.c fireworks.h fireworks_draw.c fireworks_draw.h
                sun.c sun.h carshadow.c carshadow.h rplrec.c rplrec.h
                portcfg.c portcfg.h)
+if(ANDROID)
+  # SDLActivity loads libmain.so and calls its SDL_main (android_main.c, which
+  # calls rally's main renamed).
+  add_library(rally SHARED ${RALLY_SRC} android_main.c)
+  set_target_properties(rally PROPERTIES OUTPUT_NAME main)
+  set_source_files_properties(rally.c PROPERTIES COMPILE_DEFINITIONS main=rally_main)
+  target_link_libraries(rally PRIVATE log android)
+else()
+  add_executable(rally ${RALLY_SRC})
+endif()
 target_include_directories(rally PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 if(RALLY_INTERP)
   target_compile_definitions(rally PRIVATE RALLY_INTERP=1)
@@ -43,7 +53,7 @@ endif()
 
 # aarch64 builds link the GLES2 backend; everything else desktop GL.
 # Override with -DRALLY_GAME_GLES2=ON/OFF.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" AND NOT APPLE)
+if((CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" AND NOT APPLE) OR ANDROID)
   set(_rally_gles2_default ON)
 else()
   set(_rally_gles2_default OFF)
@@ -55,7 +65,7 @@ option(RALLY_GAME_GLES2 "rally links plat_sdl2_gles2 instead of plat_sdl2_gl"
 # and no window to size, so it hides the resolution and controller-device
 # rows.  ON for Windows and Linux x86-64, OFF for aarch64.  It never changes
 # what the game logic does.  Override with -DRALLY_DESKTOP=ON/OFF.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" AND NOT APPLE)
+if((CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" AND NOT APPLE) OR ANDROID)
   set(_rally_desktop_default OFF)
 else()
   set(_rally_desktop_default ON)

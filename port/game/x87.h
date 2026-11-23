@@ -12,7 +12,8 @@
 
 #include <math.h>
 
-#if (defined(__x86_64__) || defined(__i386__)) && defined(__GNUC__)
+#if (defined(__x86_64__) || defined(__i386__)) && defined(__GNUC__) \
+    && __LDBL_MANT_DIG__ == 64   /* Android's x86_64 long double is binary128 */
 #define X87_NATIVE 1
 static inline long double x87_sin(long double x) { __asm__("fsin" : "+t"(x)); return x; }
 static inline long double x87_cos(long double x) { __asm__("fcos" : "+t"(x)); return x; }
