@@ -32,6 +32,16 @@ table{border-collapse:collapse} td,th{border-bottom:1px solid #8884;padding:.3em
 <li>Menu smoke test on the device.</li>
 </ul>
 <p><b>Not verified:</b> how it feels to play, input latency (the GL thread adds up to about one frame), temperatures and battery over a long session, and other devices. This needs a person with the console.</p>
+<h2>Android port</h2>
+<p>The same port runs on Android: SDL2 hosts it as <code>libmain.so</code> (GLES2, arm64-v8a and x86_64), built by the Gradle project in <code>android/</code>. The APK holds no game data; copy <code>RAL.EXE</code> and <code>FILES</code> from your own copy of the game to <code>/sdcard/Android/media/org.rally.championship/game/</code>.</p>
+<div class="g"><img src="img/android_menu.png" alt="Menu on an Android phone with the on-screen d-pad"><img src="img/android_race.png" alt="Race at 1600x720 on an Android phone with the touch controls"></div>
+<p><small>Screenshots from the Android emulator (a 2400x1080 phone, 20:9, software GL), so frame rates measured there mean nothing.</small></p>
+<ul>
+<li><b>Wide screens.</b> The game renders at the screen's aspect (1600x720 on a 20:9 phone). Wider than 4:3 keeps the 4:3 picture's vertical view and shows more to the sides, and the side culling widens to match, so the edges do not pop. At 4:3 the simulation record and the frames are byte-identical to before. The menus are drawn for 4:3 and stay in the middle with black bars.</li>
+<li><b>Touch controls.</b> Without a gamepad an overlay is drawn: d-pad, OK and ESC in the menus; in a race a drag on the left half steers, GAS and BRK on the right, UP / DN gears, HB handbrake, CAM view, II pause. It feeds the game's existing pad path, so nothing in the game logic changed. A gamepad works as on desktop and hides the overlay until the screen is touched again. Back is Esc.</li>
+<li><b>Case-insensitive file access.</b> The game spells its data paths in mixed case. Windows and FAT do not care; Linux and Android storage do. Reads now fall back to a case-insensitive path walk (<code>port/plat/fopen_ci.h</code>), which also lets the desktop Linux build run from an ISO extract.</li>
+</ul>
+<p><b>Not verified:</b> everything on a physical phone (frame rate, touch feel, thermals, gamepad hot-plug, notches), the steering drag with two fingers (tested only by taps through <code>adb</code> and a unit check of the layout), and audio.</p>
 <h2>Install on the R36S</h2>
 <ol>
 <li>Build for aarch64 against a glibc 2.30 sysroot (see below), or use your own build.</li>
